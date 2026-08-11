@@ -1,0 +1,92 @@
+# ==============================================================================
+# PROJECT DEPENDENCIES
+# ==============================================================================
+# Install everything with:
+#
+#     pip install -r requirements.txt
+#
+# The >= means "this version or newer". We pin a minimum rather than an exact
+# version so the project keeps working as libraries release fixes, while still
+# guaranteeing the features we rely on are present.
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# CORE - talking to the language model
+# ------------------------------------------------------------------------------
+
+# The official OpenAI client. Used for three separate jobs in this project:
+# generating answers, running the guardrail checks, and creating embeddings.
+openai
+
+# Reads a file named .env and loads its contents into environment variables.
+# This is how the API key stays out of the code and out of version control.
+python-dotenv
+
+
+# ------------------------------------------------------------------------------
+# INGESTION - turning PDFs into searchable text
+# ------------------------------------------------------------------------------
+
+# Extracts text from PDFs and returns markdown, preserving headings and reading
+# order. Fast, small, and needs no machine learning models downloaded.
+pymupdf4llm
+
+# Splits long text into chunks. We use its markdown-aware splitter, which
+# prefers to cut at heading and paragraph boundaries rather than mid-sentence.
+langchain-text-splitters
+
+
+# ------------------------------------------------------------------------------
+# STORAGE - the vector database
+# ------------------------------------------------------------------------------
+
+# Chroma stores our chunks along with their embeddings and metadata, and finds
+# the closest matches to a question. It runs locally and saves to a folder on
+# disk, so there is nothing to sign up for and nothing to configure.
+chromadb
+
+# The bridge between LangChain and OpenAI. We use it for the embedding model
+# that Chroma calls when storing and searching.
+langchain-openai
+
+
+# ------------------------------------------------------------------------------
+# RERANKING - reordering search results properly
+# ------------------------------------------------------------------------------
+
+# Runs the cross-encoder model that re-scores retrieved chunks against the
+# question. This runs on your own machine and downloads a model of roughly
+# 90 MB the first time it is used, so the first run is slower than later ones.
+sentence-transformers
+
+
+# ------------------------------------------------------------------------------
+# ORCHESTRATION - wiring the steps together
+# ------------------------------------------------------------------------------
+
+# LangGraph lets us define the pipeline as a graph of nodes. It is what gives us
+# the interrupt feature that makes human-in-the-loop possible: the graph can stop
+# mid-run, wait for a person, and then continue from exactly where it paused.
+langgraph
+
+# ------------------------------------------------------------------------------
+# VALIDATION - checking the shape of model output
+# ------------------------------------------------------------------------------
+
+# Pydantic lets us describe the structure we expect as a Python class, then
+# checks real data against it. This is the engine behind the format guardrail.
+pydantic
+
+
+# ------------------------------------------------------------------------------
+# API - the optional web backend
+# ------------------------------------------------------------------------------
+# Only needed if you build the FastAPI layer. Everything else in the project runs
+# without these two.
+
+# The web framework that exposes the pipeline over HTTP.
+fastapi
+
+# The server that actually runs the FastAPI application.
+uvicorn

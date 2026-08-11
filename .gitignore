@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# large, publicly downloadable
+data/raw/*.pdf
+data/processed/*.md
+data/chroma/
