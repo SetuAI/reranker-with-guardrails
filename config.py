@@ -51,7 +51,7 @@ from dotenv import load_dotenv
 # line runs first no matter which script is started.
 #
 # If there is no .env file, this does nothing and raises no error.
-load_dotenv()
+load_dotenv(override=True)
 
 
 # ==============================================================================
@@ -395,7 +395,7 @@ TOPIC_SIMILARITY_THRESHOLD = 0.40
 # Demanding that every number be traceable would send nearly every answer to
 # human review, and a review queue that contains everything is a review queue
 # nobody reads.
-GROUNDING_THRESHOLD = 0.8
+GROUNDING_THRESHOLD = 0.90
 
 
 # ==============================================================================

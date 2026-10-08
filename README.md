@@ -11,6 +11,7 @@ able to see three mechanisms working:
 
 | Mechanism                   | Where you see it                                                                                           |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------- |
+|                             |                                                                                                            |
 | **Reranking**         | 20 candidates in, 5 out, with visible movement in the rankings                                             |
 | **Guardrails**        | An off-topic question stopped before it costs anything; an ungrounded answer caught before anyone reads it |
 | **Human-in-the-loop** | The graph genuinely stops mid-run and waits                                                                |
