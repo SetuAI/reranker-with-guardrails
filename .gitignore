@@ -6,6 +6,5 @@ __pycache__/
 .DS_Store
 
 # large, publicly downloadable
-data/raw/*.pdf
 data/processed/*.md
 data/chroma/
