@@ -70,19 +70,34 @@ sentence-transformers
 # mid-run, wait for a person, and then continue from exactly where it paused.
 langgraph
 
+# Saves paused runs to a SQLite file, so the web API can resume them later --
+# even after a restart. run_query.py does not need it.
+langgraph-checkpoint-sqlite
+
 # ------------------------------------------------------------------------------
 # VALIDATION - checking the shape of model output
 # ------------------------------------------------------------------------------
 
 # Pydantic lets us describe the structure we expect as a Python class, then
-# checks real data against it. This is the engine behind the format guardrail.
+# checks real data against it. The web API uses it to check incoming requests.
 pydantic
+
+
+# ------------------------------------------------------------------------------
+# TESTING
+# ------------------------------------------------------------------------------
+
+# Runs the offline tests in tests/. None of them call an API.
+pytest
+
+# Lets the tests call the web API without starting a server.
+httpx
 
 
 # ------------------------------------------------------------------------------
 # API - the optional web backend
 # ------------------------------------------------------------------------------
-# Only needed if you build the FastAPI layer. Everything else in the project runs
+# Only needed for the web API in api/main.py. Everything else in the project runs
 # without these two.
 
 # The web framework that exposes the pipeline over HTTP.

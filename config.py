@@ -97,6 +97,10 @@ PROCESSED_DIR = DATA_DIR / "processed"
 # need to look inside it.
 VECTOR_STORE_DIR = DATA_DIR / "chroma"
 
+# Where the web API saves runs that are paused for human review, so they survive
+# a restart. A single SQLite file -- no database server needed.
+CHECKPOINT_DB = DATA_DIR / "checkpoints.sqlite"
+
 
 # ==============================================================================
 # SECTION 2 - THE DOCUMENT SET

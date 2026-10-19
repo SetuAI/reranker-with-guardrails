@@ -51,7 +51,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 import config
 from graph.state import GraphState
+from guardrails.safety import check_safety, refusal_message
 from guardrails.topic import check_topic, REFUSAL_MESSAGE, BLOCK
+from guardrails.format import check_format
 from guardrails.factual import (
     check_grounding,
     collect_source_texts,
@@ -87,6 +89,17 @@ def input_guardrail_node(state: GraphState) -> dict:
     That is the general shape of guardrail placement: reject early, and the
     ordering pays for itself.
     """
+    # Safety first: it is pure pattern matching, so it costs nothing at all, and
+    # a question carrying personal data must not reach even the embedding call
+    # the topic check makes.
+    safety = check_safety(state["question"])
+    if safety.verdict == BLOCK:
+        return {
+            "input_allowed": False,
+            "input_block_reason": safety.reason,
+            "final_answer": refusal_message(safety),
+        }
+
     decision = check_topic(state["question"])
 
     if decision.verdict == BLOCK:
@@ -283,6 +296,19 @@ def output_guardrail_node(state: GraphState) -> dict:
     checking logic. As written, the routing rule lives in one place in
     build_graph.py and this node never needs to change.
     """
+    # Shape first: it is free. A malformed answer goes to review without
+    # spending a model call on the grounding check.
+    shape = check_format(state["draft_answer"])
+    if not shape.passed:
+        return {
+            "grounding_verdict": NEEDS_REVIEW,
+            "grounding_score": 0.0,
+            "unsupported_items": [f"format: {problem}" for problem in shape.problems],
+            "review_required": True,
+        }
+
+    # Kept split by year, so a figure is checked against the year it is
+    # attributed to and not just "somewhere in the sources".
     sources = collect_source_texts(state["reranked_chunks"])
     decision = check_grounding(state["draft_answer"], sources)
 

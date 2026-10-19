@@ -154,8 +154,8 @@ def show_grounding(state: dict) -> None:
     print(f"  score     {state.get('grounding_score', 0):.2f}")
 
     unsupported = state.get("unsupported_items") or []
-    if unsupported:
-        print(f"  flagged   {unsupported[0][:60]}")
+    for item in unsupported:
+        print(f"  flagged   {item[:60]}")
 
 
 # ==============================================================================
@@ -283,7 +283,7 @@ def run(question: str, company: str) -> None:
         print(f"  reason (internal): {state['input_block_reason']}")
         print()
         print("  Nothing was retrieved and no answer was generated. The question")
-        print("  cost one embedding call and stopped there.")
+        print("  cost at most one embedding call and stopped there.")
         print()
         print("-" * 74)
         print(f"  {state['final_answer']}")

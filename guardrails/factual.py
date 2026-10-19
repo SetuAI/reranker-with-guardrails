@@ -16,7 +16,8 @@ WHY "IS THIS TRUE" IS THE WRONG QUESTION
 It is worth being honest about the difficulty here.
 
 The other guardrails check properties we can define. Is this on topic? Does this
-contain a PAN number? Is this valid JSON? Each has a definite answer.
+contain a PAN number? Does the answer mention both years? Each has a definite
+answer.
 
 "Is this true?" has no such shortcut. Verifying an arbitrary claim is about as
 hard as producing it in the first place, so asking one model to fact-check
@@ -53,6 +54,16 @@ THE APPROACH
 Check 1 is unusually good value. Most damaging inventions in a financial context
 are numeric, and a number either appears in the retrieved text or it does not.
 No judgement required.
+
+Check 1 is also YEAR-AWARE. A number that appears somewhere in the sources is not
+enough: if the answer says "in FY2026 revenue was X", then X must appear in the
+FY2026 extracts. On this corpus that matters more than anything else, because
+the most likely numeric mistake is not an invented figure -- it is a real figure
+attached to the wrong year.
+
+And Check 1 is never allowed to approve a comparison on its own. "Revenue rose"
+and "revenue fell" contain the same numbers; only reading the claim can tell them
+apart. So any answer that uses comparison language always goes on to Check 2.
 
 THE ACTION THIS GUARDRAIL TAKES IS DIFFERENT
 --------------------------------------------
@@ -173,9 +184,72 @@ def extract_numbers(text: str) -> List[str]:
     return [value.replace(",", "") for value in raw]
 
 
-def check_numbers(answer: str, sources: List[str]) -> GroundingDecision:
+# Labels the answer may use for each fiscal year. "FY2025", "FY 2025",
+# "FY25" and "2024-25" all refer to the year ended 31 March 2025.
+def year_labels(fiscal_year: str) -> List[str]:
+    """Return the regex patterns that name one fiscal year, e.g. FY2025."""
+    end = int(fiscal_year[2:])
+    start = end - 1
+    return [
+        rf"\bFY\s?-?\s?{end}\b",
+        rf"\bFY\s?-?\s?{str(end)[2:]}\b",
+        rf"\b{start}\s?[-–/]\s?{str(end)[2:]}\b",
+    ]
+
+
+def years_mentioned(sentence: str, fiscal_years: List[str]) -> List[str]:
+    """Return which of the fiscal years a sentence refers to by name."""
+    return [
+        year for year in fiscal_years
+        if any(re.search(p, sentence, re.IGNORECASE) for p in year_labels(year))
+    ]
+
+
+def strip_year_labels(sentence: str, fiscal_years: List[str]) -> str:
     """
-    Verify that the numbers in the answer appear somewhere in the sources.
+    Remove the year labels themselves before extracting numbers.
+
+    Otherwise "FY2026" contributes the number 2026, which is a label, not a
+    figure, and would be checked against the sources like any other number.
+    """
+    for year in fiscal_years:
+        for pattern in year_labels(year):
+            sentence = re.sub(pattern, " ", sentence, flags=re.IGNORECASE)
+    return sentence
+
+
+def split_sentences(text: str) -> List[str]:
+    """
+    Split an answer into sentences and bullet lines.
+
+    The split must not break decimals ("21.1") or amounts ("1,53,670"), so we
+    only split on a full stop followed by whitespace, or on a line break.
+    """
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
+    return [part for part in parts if part.strip()]
+
+
+def check_numbers(answer: str, sources: Dict[str, List[str]]) -> GroundingDecision:
+    """
+    Verify that the numbers in the answer appear in the right year's sources.
+
+    sources maps each fiscal year to its chunk texts, e.g.
+        {"FY2025": [...], "FY2026": [...]}
+
+    THE YEAR RULE
+    -------------
+    Each sentence of the answer is checked on its own:
+
+        names exactly one year   ->  its numbers must appear in THAT year's chunks
+        names both or neither    ->  its numbers may appear in any chunk
+
+    The answer is generated under "what FY2025 said" / "what FY2026 said"
+    headings, so a heading line sets the year for the lines beneath it until the
+    next heading names a different year.
+
+    Sentences naming both years are usually the "what changed" summary, which
+    legitimately quotes figures from each side, so they fall back to the pooled
+    check rather than being rejected.
 
     ABOUT set()
     -----------
@@ -186,11 +260,40 @@ def check_numbers(answer: str, sources: List[str]) -> GroundingDecision:
     With five chunks the difference is invisible. With a long answer checked
     against many chunks it is the difference between instant and noticeable.
     """
-    source_numbers = set()
-    for source_text in sources:
-        source_numbers.update(extract_numbers(source_text))
+    fiscal_years = list(sources)
 
-    answer_numbers = extract_numbers(answer)
+    numbers_by_year = {}
+    for year, texts in sources.items():
+        numbers_by_year[year] = set()
+        for source_text in texts:
+            numbers_by_year[year].update(extract_numbers(source_text))
+    all_source_numbers = set().union(*numbers_by_year.values())
+
+    # Walk the answer sentence by sentence, remembering the year set by the most
+    # recent heading so the lines beneath it inherit it.
+    answer_numbers = []
+    unsupported = []
+    current_year = None
+    for sentence in split_sentences(answer):
+        named = years_mentioned(sentence, fiscal_years)
+        if len(named) == 1:
+            current_year = named[0]
+            year = current_year
+        elif len(named) > 1:
+            current_year = None
+            year = None
+        else:
+            year = current_year
+
+        allowed = numbers_by_year[year] if year else all_source_numbers
+        for number in extract_numbers(strip_year_labels(sentence, fiscal_years)):
+            answer_numbers.append(number)
+            if number not in allowed:
+                if year and number in all_source_numbers:
+                    unsupported.append(f"{number} (attributed to {year}, "
+                                       f"found only in another year)")
+                else:
+                    unsupported.append(number)
 
     # An answer with no numbers cannot be judged by this check at all. We return
     # NEEDS_REVIEW rather than GROUNDED, which sends it on to Check 2.
@@ -205,7 +308,6 @@ def check_numbers(answer: str, sources: List[str]) -> GroundingDecision:
             reason="answer contains no numbers, this check cannot judge it",
         )
 
-    unsupported = [n for n in answer_numbers if n not in source_numbers]
     supported_count = len(answer_numbers) - len(unsupported)
     ratio = supported_count / len(answer_numbers)
 
@@ -256,7 +358,12 @@ it sounds plausible or is probably correct.
 
 Pay particular attention to comparisons. A claim that something increased,
 decreased, strengthened or softened between two years is only supported if the
-sources actually show both sides of that comparison.
+sources actually show both sides of that comparison, and the direction stated
+matches them.
+
+The sources are grouped by fiscal year. A statement about one year is only
+supported by that year's sources -- a figure from FY2025 described as FY2026 is
+UNSUPPORTED.
 
 Reply in exactly this format:
 
@@ -272,7 +379,22 @@ ANSWER TO CHECK:
 {answer}"""
 
 
-def check_claims(answer: str, sources: List[str]) -> GroundingDecision:
+def format_sources(sources: Dict[str, List[str]]) -> str:
+    """
+    Lay out the sources under a heading per year.
+
+    The claim checker can only judge "FY2026 said X" if it can see which extract
+    came from which year. Pooling them into one anonymous list would hide exactly
+    the distinction this project is about.
+    """
+    sections = []
+    for year, texts in sources.items():
+        body = "\n\n---\n\n".join(texts) if texts else "(no extracts)"
+        sections.append(f"=== {year} ===\n{body}")
+    return "\n\n".join(sections)
+
+
+def check_claims(answer: str, sources: Dict[str, List[str]]) -> GroundingDecision:
     """
     Ask a model whether the answer is supported by the sources.
 
@@ -293,7 +415,7 @@ def check_claims(answer: str, sources: List[str]) -> GroundingDecision:
     "Always fail closed" is too blunt a rule to apply everywhere without thinking
     about what the failure actually costs.
     """
-    combined_sources = "\n\n---\n\n".join(sources)
+    combined_sources = format_sources(sources)
 
     try:
         response = client.chat.completions.create(
@@ -343,65 +465,100 @@ def check_claims(answer: str, sources: List[str]) -> GroundingDecision:
 # SECTION 4 - PUTTING IT TOGETHER
 # ==============================================================================
 
-def check_grounding(answer: str, sources: List[str]) -> GroundingDecision:
+# Words that assert a change between years. An answer using any of them makes a
+# claim about direction that matching numbers alone cannot verify.
+COMPARISON_PATTERN = re.compile(
+    r"\b(increas|decreas|ris(e|es|ing)|rose|fell|fall|declin|grew|grow|"
+    r"improv|worsen|deteriorat|expand|contract|reduc|higher|lower|up from|"
+    r"down from|compared|versus|vs\.?|change|strengthen|weaken|soften)",
+    re.IGNORECASE,
+)
+
+
+def check_grounding(answer: str, sources: Dict[str, List[str]]) -> GroundingDecision:
     """
     Run the full grounding guardrail.
 
-        numbers all check out   ->  grounded, no API call needed
-        otherwise               ->  ask the model to check the claims
+        numbers fail                     ->  ask the model to check the claims
+        numbers pass, answer compares    ->  ask the model anyway
+        numbers pass, no comparison      ->  grounded, no API call needed
 
-    Check 1 works as a filter. Answers whose numbers all trace back are accepted
-    immediately and cost nothing; only the remainder need a model call.
+    Check 1 works as a filter. It can reject cheaply, but it can only ACCEPT an
+    answer that makes no claim about direction. "Margin rose from 20 to 21" and
+    "margin fell from 21 to 20" contain the same numbers, so for any comparison
+    the model has to read the words.
+
+    In a project about comparison, that means most answers reach Check 2. That
+    is the honest cost of checking comparisons at all.
     """
     if not answer.strip():
         return GroundingDecision(UNGROUNDED, "input", "answer is empty")
 
     number_decision = check_numbers(answer, sources)
 
-    if number_decision.verdict == GROUNDED:
+    if number_decision.verdict == GROUNDED and not COMPARISON_PATTERN.search(answer):
         return number_decision
+
+    if number_decision.unsupported_items:
+        # A number that does not trace back still needs a person, even if the
+        # claim checker is satisfied -- the model reading prose can miss a digit.
+        # Keep Check 1's specific findings: "17.4 attributed to FY2026, found
+        # only in another year" is more useful to a reviewer than anything vaguer.
+        claim_decision = check_claims(answer, sources)
+        if claim_decision.verdict == GROUNDED:
+            return number_decision
+        claim_decision.unsupported_items = (
+            number_decision.unsupported_items + claim_decision.unsupported_items
+        )
+        return claim_decision
 
     return check_claims(answer, sources)
 
 
-def collect_source_texts(reranked_chunks: Dict[str, List[Dict]]) -> List[str]:
+def collect_source_texts(reranked_chunks: Dict[str, List[Dict]]) -> Dict[str, List[str]]:
     """
-    Flatten the per-year chunks into one plain list of texts.
+    Reduce the per-year chunks to their texts, KEEPING the split by year.
 
-    The rest of the pipeline keeps chunks separated by year, because that
-    separation is what makes a fair comparison possible. This check does not care
-    about the split -- it only needs to know whether a statement appears anywhere
-    in what we retrieved.
-
-    A small helper, but it keeps the shape conversion in one named place rather
-    than repeated wherever grounding is called.
+    An earlier version flattened everything into one list on the grounds that
+    this check only needed to know whether a statement appeared anywhere. That
+    was wrong for this corpus: a figure that appears "anywhere" may well be the
+    other year's figure, and that is the mistake most worth catching here.
     """
-    texts = []
-    for year_results in reranked_chunks.values():
-        for result in year_results:
-            texts.append(result["text"])
-    return texts
+    return {
+        year: [result["text"] for result in year_results]
+        for year, year_results in reranked_chunks.items()
+    }
 
 
 # ==============================================================================
 # SECTION 5 - RUNNING THIS FILE DIRECTLY
 # ==============================================================================
 
-SAMPLE_SOURCES = [
-    """Revenue for the year stood at 1,53,670 crore, an increase of 6.1 per cent
-    over the previous year. Operating margin was 21.1 per cent.""",
+SAMPLE_SOURCES = {
+    "FY2025": [
+        """Revenue for the year stood at 1,53,670 crore, an increase of 6.1 per cent
+        over the previous year. Operating margin was 21.1 per cent.""",
 
-    """The Company operates internationally and is exposed to foreign exchange
-    risk, principally in US dollars, euro and pound sterling. Attrition for the
-    year was 14.2 per cent.""",
-]
+        """The Company operates internationally and is exposed to foreign exchange
+        risk, principally in US dollars, euro and pound sterling. Attrition for the
+        year was 14.2 per cent.""",
+    ],
+    "FY2026": [
+        """Revenue for the year stood at 1,62,990 crore. Operating margin was
+        20.8 per cent. Attrition for the year was 13.9 per cent.""",
+    ],
+}
 
 SAMPLE_ANSWERS = [
-    # Every number appears in the sources. Check 1 accepts it with no API call.
-    "Revenue was 1,53,670 crore with an operating margin of 21.1 per cent.",
+    # Every number appears in the right year, and no change is claimed. Check 1
+    # accepts it with no API call.
+    "In FY2025 revenue was 1,53,670 crore with an operating margin of 21.1 per cent.",
 
-    # An invented margin: 24.8 where the source says 21.1. This is the failure
-    # that causes real damage in a financial context.
+    # A real figure attached to the wrong year: 21.1 is FY2025's margin. A
+    # pooled check would have accepted this. The year-aware check does not.
+    "In FY2026 the operating margin was 21.1 per cent.",
+
+    # An invented margin: 24.8 appears in neither year.
     "The operating margin improved to 24.8 per cent during the year.",
 
     # No numbers at all, so Check 1 cannot judge it and passes it on. The claim

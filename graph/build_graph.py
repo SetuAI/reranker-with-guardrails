@@ -68,10 +68,14 @@ WHY A CHECKPOINTER IS REQUIRED
 Pausing is only useful if the state survives the pause. A checkpointer is what
 saves it.
 
-We use MemorySaver, which keeps state in memory. It is enough for this project
-and it disappears when the program exits. A production system would use a
-database-backed checkpointer so a paused run survives a restart -- the graph code
-would not change at all, only this one object.
+run_query.py uses MemorySaver, which keeps state in memory and disappears when
+the program exits. That is enough there, because it pauses and resumes inside a
+single run of the script.
+
+The web API (api/main.py) cannot work that way: a run paused by one request is
+resumed by another, possibly after a restart. So it passes in a SqliteSaver,
+which writes the state to a file (config.CHECKPOINT_DB). The graph code does not
+change at all -- only the checkpointer object handed to build_graph().
 
 Without a checkpointer, LangGraph will not allow an interrupt, because a pause
 with nothing to resume from is meaningless.
@@ -166,7 +170,7 @@ def route_after_output_guardrail(state: GraphState) -> str:
 # SECTION 2 - BUILDING THE GRAPH
 # ==============================================================================
 
-def build_graph(enable_interrupt: bool = True):
+def build_graph(enable_interrupt: bool = True, checkpointer=None):
     """
     Assemble the pipeline and return something runnable.
 
@@ -176,6 +180,10 @@ def build_graph(enable_interrupt: bool = True):
         When True, the graph pauses before human review. When False it runs
         straight through -- useful for testing, and for batch runs where nobody
         is waiting to review anything.
+
+    checkpointer
+        Where paused runs are saved. Defaults to MemorySaver (in memory, lost on
+        exit). The API passes a SqliteSaver so paused runs survive a restart.
 
     RETURNS
     -------
@@ -281,7 +289,7 @@ def build_graph(enable_interrupt: bool = True):
     # It also means every run needs an ID, so the graph knows which saved state
     # to resume. That is the thread_id passed in when the graph is invoked.
     return builder.compile(
-        checkpointer=MemorySaver(),
+        checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
         interrupt_before=["human_review"] if enable_interrupt else [],
     )
 

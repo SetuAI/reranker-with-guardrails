@@ -8,3 +8,4 @@ __pycache__/
 # large, publicly downloadable
 data/processed/*.md
 data/chroma/
+data/checkpoints.sqlite*

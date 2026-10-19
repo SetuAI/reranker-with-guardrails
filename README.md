@@ -1,4 +1,3 @@
-
 # Annual Report RAG — Guardrails, Reranking and Human-in-the-Loop
 
 A teaching project. A LangGraph pipeline that answers **year-over-year comparison
@@ -43,8 +42,16 @@ pip install -r requirements.txt
 cp .env.example .env               # then add your OpenAI key
 ```
 
-Download the four annual reports from each company's investor relations page and
-save them in `data/raw/` under **exactly** these names:
+The four annual reports are stored in this repository with
+[Git LFS](https://git-lfs.com), because they are large. Install Git LFS before
+cloning, or fetch them afterwards:
+
+```bash
+git lfs install
+git lfs pull
+```
+
+They should end up in `data/raw/` under **exactly** these names:
 
 ```
 data/raw/infosys_fy2025.pdf
@@ -53,7 +60,10 @@ data/raw/eternal_fy2025.pdf
 data/raw/eternal_fy2026.pdf
 ```
 
-The PDFs are not in this repository — they are large and publicly available.
+If a PDF opens as a short text file starting `version https://git-lfs...`, LFS
+has not fetched it yet — run `git lfs pull`. Without LFS you can also download
+the reports from each company's investor relations page and save them under the
+names above.
 
 ---
 
@@ -78,6 +88,37 @@ python run_query.py "How did the risk disclosures change?"
 python run_query.py "How did revenue change?" Eternal
 ```
 
+**Or run it as a web service.**
+
+```bash
+uvicorn api.main:app --reload
+```
+
+Open http://127.0.0.1:8000/docs to try it in the browser. There are three
+endpoints:
+
+| Endpoint                   | What it does                                                   |
+| -------------------------- | -------------------------------------------------------------- |
+| `POST /ask`                | Ask a question. Returns an answer, a refusal, or `"paused"`.   |
+| `POST /review/{thread_id}` | Approve or reject a paused answer, using the id `/ask` gave.   |
+| `GET /health`              | Check the server is running.                                   |
+
+Paused answers are saved in `data/checkpoints.sqlite`, so you can stop the
+server, start it again, and still review them.
+
+**Check the pipeline against labelled questions.**
+
+```bash
+python run_evaluation.py
+python run_evaluation.py --threshold 0.95
+```
+
+This runs every question in `evaluation/questions.json` and shows whether each
+one was blocked, answered or sent to review, compared with what was expected.
+Use it to choose `GROUNDING_THRESHOLD` instead of guessing. The labels supplied
+are a starting point: check them against the reports and add your own. It makes
+real API calls (a few cents for the supplied ten).
+
 ---
 
 ## Running the pieces separately
@@ -92,7 +133,9 @@ python graph/build_graph.py      # compiles and draws the graph (free)
 python retrieval/search.py       # vector search, with and without year filtering
 python retrieval/rerank.py       # before and after reranking, side by side
 
+python guardrails/safety.py      # personal data and advice requests (free)
 python guardrails/topic.py       # what gets refused, and why
+python guardrails/format.py      # badly shaped answers (free)
 python guardrails/factual.py     # what gets flagged for review
 ```
 
@@ -108,6 +151,7 @@ the code rather than drawn by hand.
 config.py                 every setting, one file
 run_ingestion.py          build the index
 run_query.py              ask a question
+run_evaluation.py         run the labelled questions, report the results
 
 ingestion/
   load_pdfs.py            PDF  -> markdown
@@ -119,13 +163,23 @@ retrieval/
   rerank.py               slow, careful, cuts 20 to 5
 
 guardrails/
+  safety.py               input:  personal data? a request for advice?
   topic.py                input:  is this our subject?
-  factual.py              output: is this supported by the sources?
+  format.py               output: does it compare both years, without advice?
+  factual.py              output: is each figure in the right year's sources?
 
 graph/
   state.py                what flows through
   nodes.py                what each step does
   build_graph.py          what order they run in
+
+api/
+  main.py                 the pipeline as a web service
+
+evaluation/
+  questions.json          questions with the outcome each should get
+
+tests/                    offline tests, no API key needed
 ```
 
 ---
@@ -133,7 +187,7 @@ graph/
 ## The pipeline
 
 ```
-                    input guardrail
+                    input guardrail      safety, then topic
                           |
                 +---------+---------+
              blocked              allowed
@@ -144,7 +198,7 @@ graph/
                 |                    |
                 |                generate
                 |                    |
-                |             output guardrail
+                |             output guardrail     format, then grounding
                 |                    |
                 |          +---------+---------+
                 |      grounded            needs review
@@ -156,6 +210,21 @@ graph/
                                 |
                                END
 ```
+
+---
+
+## Tests
+
+```bash
+python -m pytest tests
+```
+
+They run offline in about a second, with no API key and no index. They pin
+down the behaviour this README promises: an off-topic question stopped before
+any API call, personal data and advice requests refused, a figure attributed to
+the wrong year caught, a comparison always sent to the claim check, and the
+graph pausing for review and resuming with the reviewer's decision -- including
+after a server restart.
 
 ---
 
@@ -190,7 +259,7 @@ The mechanism transfers between projects. **The content does not.** Copying a
 guardrail from elsewhere and leaving its examples in place produces something
 that blocks your real users while letting through exactly what you did not want.
 
-### Some more queries to try : 
+### Some more queries to try :
 
 python3 run_query.py "What new risks appeared in FY2026 that were not mentioned in FY2025?"
 
@@ -202,9 +271,9 @@ python3 run_query.py "How did the company's approach to quantum computing change
 
 If none of them pause:
 
-Then your threshold is too permissive for this corpus. In `config.py`: 
+Then your threshold is too permissive for this corpus. In `config.py`:
 
-set : 
+set :
 
 ```python
 GROUNDING_THRESHOLD = 0.95
